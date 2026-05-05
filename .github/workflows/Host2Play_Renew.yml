@@ -1,7 +1,7 @@
 name: Host2Play 续期
 
 on:
-  workflow_dispatch:    # 必须空行+正确缩进
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -36,11 +36,12 @@ jobs:
         run: |
           pip install DrissionPage xvfbwrapper requests pydub SpeechRecognition pysocks proxy-url
 
-      - name: 启动代理
+      - name: 下载并配置代理
         env:
           PROXY_NODE: ${{ secrets.PROXY_NODE }}
         run: |
           if [ -z "$PROXY_NODE" ]; then
+            echo "PROXY_SERVER=" >> $GITHUB_ENV
             echo "✅ 直连模式"
             exit 0
           fi
@@ -48,7 +49,8 @@ jobs:
           wget -q https://github.com/oyz6/action/releases/download/proxy/Xray-linux-64.zip
           unzip -q Xray-linux-64.zip -d xray && chmod +x xray/xray
 
-          python3 << 'PYEOF'
+          # 直接把Python代码写在单独的脚本里，避免yml多行解析错误
+          cat > parse_proxy.py << 'EOF'
 import os, json, base64
 from urllib.parse import urlparse, parse_qs
 
@@ -71,7 +73,6 @@ if p.scheme == "vless":
         "settings": {"vnext": [{"address": addr, "port": int(port), "users": [{"id": uuid, "encryption": "none"}]}]},
         "streamSettings": {"network": q.get("type", ["tcp"])[0], "security": q.get("security", ["none"])[0]}
     }
-
 elif p.scheme == "vmess":
     d = json.loads(base64.b64decode(u[8:] + "====").decode())
     out = {
@@ -79,7 +80,6 @@ elif p.scheme == "vmess":
         "settings": {"vnext": [{"address": d["add"], "port": int(d["port"]), "users": [{"id": d["id"], "alterId": 0}]}]},
         "streamSettings": {"network": d.get("net", "tcp"), "security": "tls" if d.get("tls") else "none"}
     }
-
 elif p.scheme == "trojan":
     pwd, rest = u[9:].split("@", 1)
     hp, qs = rest.split("?", 1) if "?" in rest else (rest, "")
@@ -89,7 +89,6 @@ elif p.scheme == "trojan":
         "settings": {"servers": [{"address": addr, "port": int(port), "password": pwd}]},
         "streamSettings": {"network": "tcp", "security": "tls"}
     }
-
 elif p.scheme == "ss":
     inf, serv = u[5:].split("@", 1)
     m, pw = base64.b64decode(inf + "==").decode().split(":", 1)
@@ -105,7 +104,10 @@ with open("xray_config.json", "w") as f:
         "inbounds": [{"protocol": "socks", "port": 1080, "listen": "127.0.0.1"}],
         "outbounds": [out]
     }, f)
-PYEOF
+EOF
+
+          export PROXY_NODE="$PROXY_NODE"
+          python3 parse_proxy.py
 
           if [ -f proxy.txt ]; then
             echo "PROXY_SERVER=$(cat proxy.txt)" >> $GITHUB_ENV
