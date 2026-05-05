@@ -5,7 +5,6 @@ import random
 import html
 import requests
 import tempfile
-import subprocess
 from xvfbwrapper import Xvfb
 from DrissionPage import ChromiumPage, ChromiumOptions
 
@@ -22,7 +21,7 @@ RENEW_URLS = [
 
 MAX_CAPTCHA = 4
 MAX_RENEW_RETRIES_PER_URL = 8
-PROXY_NODE = ""  # 留空，因为你用 WARP on Actions，不需要额外代理
+PROXY_NODE = ""
 
 # ============================================================
 
@@ -34,9 +33,7 @@ def log(msg, level="INFO"):
 
 # ========================= TG 通知 =========================
 def send_tg_photo(token, chat_id, photo_path, caption):
-    if not token or not chat_id:
-        return
-    if not photo_path or not os.path.exists(photo_path):
+    if not token or not chat_id or not photo_path or not os.path.exists(photo_path):
         return
     try:
         url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -46,8 +43,8 @@ def send_tg_photo(token, chat_id, photo_path, caption):
                 "caption": caption,
                 "parse_mode": "HTML"
             }, files={"photo": f}, timeout=20)
-    except:
-        pass
+    except Exception as e:
+        log(f"TG 通知失败: {e}", "WARN")
 
 # ========================= 页面获取 =========================
 def get_server_name(page):
@@ -87,18 +84,6 @@ def is_recaptcha_solved(page):
     except:
         pass
     return False
-
-def is_blocked(page):
-    f = find_recaptcha_frame(page, "bframe")
-    if not f:
-        return False
-    try:
-        return f.run_js("""
-            document.querySelector('.rc-doscaptcha-header-text')?.textContent.includes('try again later')
-            || document.querySelector('.rc-audiochallenge-error-message')?.offsetParent !== null
-        """)
-    except:
-        return False
 
 def click_recaptcha_checkbox(page):
     f = find_recaptcha_frame(page, "anchor")
@@ -155,7 +140,7 @@ def solve_recaptcha(page):
 
     url = get_audio_url(page)
     if not url:
-        raise Exception("获取音频失败")
+        raise Exception("获取音频地址失败")
 
     mp3 = tempfile.mktemp(suffix=".mp3")
     with open(mp3, "wb") as f:
@@ -202,15 +187,15 @@ def renew_single(url):
                 old_expire = get_expire_time(page)
                 log(f"服务器: {server} | 到期: {old_expire}")
 
-                # 打开弹窗
+                # 打开续期弹窗
                 page.run_js('document.querySelectorAll("button").forEach(b=>{if(b.innerText.includes("Renew"))b.click()})')
                 time.sleep(random.uniform(4, 6))
 
-                # 验证码
+                # 处理验证码
                 if find_recaptcha_frame(page, "anchor"):
                     solve_recaptcha(page)
 
-                # 最终续期
+                # 点击最终续期按钮
                 page.run_js('document.querySelectorAll("button").forEach(b=>{if(b.innerText==="Renew")b.click()})')
                 time.sleep(random.uniform(6, 8))
 
@@ -227,7 +212,7 @@ def renew_single(url):
                     page.quit()
                 continue
 
-        # 截图
+        # 保存截图
         os.makedirs("output/screenshots", exist_ok=True)
         screenshot = f"output/screenshots/{server}_{'ok' if success else 'fail'}.png"
         if page:
@@ -242,17 +227,18 @@ def renew_single(url):
 
     return success, server, old_expire, new_expire, screenshot, reason
 
-# ========================= 主入口 =========================
+# ========================= 主入口（修复了解包错误） =========================
 def main():
     tg_token = os.getenv("TG_BOT_TOKEN")
     tg_chat = os.getenv("TG_CHAT_ID")
 
     for url in RENEW_URLS:
         log(f"开始处理: {url}")
+        # 修复解包错误：和 return 的 6 个值一一对应
         ok, name, old, new, pic, reason = renew_single(url)
 
         if ok:
-            text = f"✅ 续期成功\n服务器: {name}\n{old} → {new}"
+            text = f"✅ 续期成功\n服务器: {name}\n到期: {old} → {new}"
         else:
             text = f"❌ 续期失败\n原因: {reason}"
 
