@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import random
-import html
 import requests
 import tempfile
 from xvfbwrapper import Xvfb
@@ -16,22 +15,16 @@ except ImportError:
 
 # ========================= 配置区域 =========================
 RENEW_URLS = [
-    "https://host2play.gratis/server/renew?i=d4f4f701-8302-4050-b89d-29492027ccfd",
+    "https://host2play.gratis/server/renew?i=你的服务器ID",
 ]
-
 MAX_CAPTCHA = 4
 MAX_RENEW_RETRIES_PER_URL = 8
-PROXY_NODE = ""
 
 # ============================================================
-
-class CaptchaBlocked(Exception):
-    pass
 
 def log(msg, level="INFO"):
     print(f"[{level}] {msg}", flush=True)
 
-# ========================= TG 通知 =========================
 def send_tg_photo(token, chat_id, photo_path, caption):
     if not token or not chat_id or not photo_path or not os.path.exists(photo_path):
         return
@@ -46,7 +39,6 @@ def send_tg_photo(token, chat_id, photo_path, caption):
     except Exception as e:
         log(f"TG 通知失败: {e}", "WARN")
 
-# ========================= 页面获取 =========================
 def get_server_name(page):
     try:
         return page.ele("#serverName", timeout=2).text.strip()
@@ -65,7 +57,6 @@ def get_expire_time(page):
             pass
     return "Unknown"
 
-# ========================= 验证码核心 =========================
 def find_recaptcha_frame(page, kind):
     try:
         for f in page.get_frames():
@@ -132,27 +123,21 @@ def solve_recaptcha(page):
     click_recaptcha_checkbox(page)
     if is_recaptcha_solved(page):
         return
-
     for _ in range(2):
         if switch_to_audio(page):
             break
         time.sleep(2)
-
     url = get_audio_url(page)
     if not url:
         raise Exception("获取音频地址失败")
-
     mp3 = tempfile.mktemp(suffix=".mp3")
     with open(mp3, "wb") as f:
         f.write(requests.get(url, timeout=15).content)
-
     text = recognize_audio(mp3)
     os.remove(mp3)
-
     if text:
         fill_and_verify(page, text)
 
-# ========================= 单个续期 =========================
 def renew_single(url):
     success = False
     server = "Unknown"
@@ -187,15 +172,12 @@ def renew_single(url):
                 old_expire = get_expire_time(page)
                 log(f"服务器: {server} | 到期: {old_expire}")
 
-                # 打开续期弹窗
                 page.run_js('document.querySelectorAll("button").forEach(b=>{if(b.innerText.includes("Renew"))b.click()})')
                 time.sleep(random.uniform(4, 6))
 
-                # 处理验证码
                 if find_recaptcha_frame(page, "anchor"):
                     solve_recaptcha(page)
 
-                # 点击最终续期按钮
                 page.run_js('document.querySelectorAll("button").forEach(b=>{if(b.innerText==="Renew")b.click()})')
                 time.sleep(random.uniform(6, 8))
 
@@ -212,7 +194,6 @@ def renew_single(url):
                     page.quit()
                 continue
 
-        # 保存截图
         os.makedirs("output/screenshots", exist_ok=True)
         screenshot = f"output/screenshots/{server}_{'ok' if success else 'fail'}.png"
         if page:
@@ -227,14 +208,14 @@ def renew_single(url):
 
     return success, server, old_expire, new_expire, screenshot, reason
 
-# ========================= 主入口（修复了解包错误） =========================
+# ========================= 主入口（完全对齐） =========================
 def main():
     tg_token = os.getenv("TG_BOT_TOKEN")
     tg_chat = os.getenv("TG_CHAT_ID")
 
     for url in RENEW_URLS:
         log(f"开始处理: {url}")
-        # 修复解包错误：和 return 的 6 个值一一对应
+        # 这里必须和 renew_single 的 return 一一对应，一共 6 个值
         ok, name, old, new, pic, reason = renew_single(url)
 
         if ok:
