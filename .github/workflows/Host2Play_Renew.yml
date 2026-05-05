@@ -1,10 +1,13 @@
 name: Host2Play 续期
 
 on:
+  workflow_dispatch:    # 必须空行+正确缩进
+  push:
+    branches:
+      - main
   schedule:
     - cron: '0 0,11,22 * * *'
     - cron: '30 5,16 * * *'
-  workflow_dispatch:
 
 permissions:
   actions: write
@@ -12,11 +15,9 @@ permissions:
 
 jobs:
   run-renew:
-    name: 执行脚本
     runs-on: ubuntu-latest
-
     steps:
-      - name: 拉取仓库
+      - name: 拉取代码
         uses: actions/checkout@v4
 
       - name: 配置 Python
@@ -24,7 +25,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
+      - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb ffmpeg unzip curl
@@ -33,14 +34,14 @@ jobs:
 
       - name: 安装 Python 库
         run: |
-          pip install DrissionPage xvfbwrapper requests pydub speechrecognition pysocks proxy-url
+          pip install DrissionPage xvfbwrapper requests pydub SpeechRecognition pysocks proxy-url
 
-      - name: 启动代理（VLESS/VMess/Trojan/SS/SOCKS5）
+      - name: 启动代理
         env:
           PROXY_NODE: ${{ secrets.PROXY_NODE }}
         run: |
           if [ -z "$PROXY_NODE" ]; then
-            echo "✅ 直连"
+            echo "✅ 直连模式"
             exit 0
           fi
 
@@ -49,11 +50,11 @@ jobs:
 
           python3 << 'PYEOF'
 import os, json, base64
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs
 
 u = os.environ["PROXY_NODE"].strip()
 if u.startswith("socks5://"):
-    with open("p.txt", "w") as f:
+    with open("proxy.txt", "w") as f:
         f.write(u.split("#")[0])
     exit(0)
 
@@ -61,61 +62,60 @@ p = urlparse(u)
 out = None
 
 if p.scheme == "vless":
-    uuid, rest = u[8:].split("@")
-    hp, qs = rest.split("?",1) if "?" in rest else (rest,"")
-    addr,port = hp.rsplit(":",1)
+    uuid, rest = u[8:].split("@", 1)
+    hp, qs = rest.split("?", 1) if "?" in rest else (rest, "")
+    addr, port = hp.rsplit(":", 1)
     q = parse_qs(qs)
     out = {
-        "protocol":"vless",
-        "settings":{"vnext":[{"address":addr,"port":int(port),"users":[{"id":uuid,"encryption":"none"}]}]},
-        "streamSettings":{"network":q.get("type",["tcp"])[0],"security":q.get("security",["none"])[0]}
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": addr, "port": int(port), "users": [{"id": uuid, "encryption": "none"}]}]},
+        "streamSettings": {"network": q.get("type", ["tcp"])[0], "security": q.get("security", ["none"])[0]}
     }
 
 elif p.scheme == "vmess":
-    d = json.loads(base64.b64decode(u[8:]+"====").decode())
+    d = json.loads(base64.b64decode(u[8:] + "====").decode())
     out = {
-        "protocol":"vmess",
-        "settings":{"vnext":[{"address":d["add"],"port":int(d["port"]),"users":[{"id":d["id"],"alterId":0}]}]},
-        "streamSettings":{"network":d.get("net","tcp"),"security":"tls" if d.get("tls") else "none"}
+        "protocol": "vmess",
+        "settings": {"vnext": [{"address": d["add"], "port": int(d["port"]), "users": [{"id": d["id"], "alterId": 0}]}]},
+        "streamSettings": {"network": d.get("net", "tcp"), "security": "tls" if d.get("tls") else "none"}
     }
 
 elif p.scheme == "trojan":
-    pwd, rest = u[9:].split("@")
-    hp, qs = rest.split("?",1) if "?" in rest else (rest,"")
-    addr,port = hp.rsplit(":",1)
+    pwd, rest = u[9:].split("@", 1)
+    hp, qs = rest.split("?", 1) if "?" in rest else (rest, "")
+    addr, port = hp.rsplit(":", 1)
     out = {
-        "protocol":"trojan",
-        "settings":{"servers":[{"address":addr,"port":int(port),"password":pwd}]},
-        "streamSettings":{"network":"tcp","security":"tls"}
+        "protocol": "trojan",
+        "settings": {"servers": [{"address": addr, "port": int(port), "password": pwd}]},
+        "streamSettings": {"network": "tcp", "security": "tls"}
     }
 
 elif p.scheme == "ss":
-    inf, serv = u[5:].split("@",1)
-    m,pw = base64.b64decode(inf+"==").decode().split(":",1)
-    addr,port = serv.split(":",1)
+    inf, serv = u[5:].split("@", 1)
+    m, pw = base64.b64decode(inf + "==").decode().split(":", 1)
+    addr, port = serv.split(":", 1)
     out = {
-        "protocol":"shadowsocks",
-        "settings":{"servers":[{"address":addr,"port":int(port),"method":m,"password":pw}]}
+        "protocol": "shadowsocks",
+        "settings": {"servers": [{"address": addr, "port": int(port), "method": m, "password": pw}]}
     }
 
-with open("xray_config.json","w") as f:
+with open("xray_config.json", "w") as f:
     json.dump({
-        "log":{"loglevel":"warning"},
-        "inbounds":[{"protocol":"socks","port":1080,"listen":"127.0.0.1"}],
-        "outbounds":[out]
-    },f)
+        "log": {"loglevel": "warning"},
+        "inbounds": [{"protocol": "socks", "port": 1080, "listen": "127.0.0.1"}],
+        "outbounds": [out]
+    }, f)
 PYEOF
 
-          if [ -f p.txt ]; then
-            echo "PROXY_SERVER=$(cat p.txt)" >> $GITHUB_ENV
-            exit 0
+          if [ -f proxy.txt ]; then
+            echo "PROXY_SERVER=$(cat proxy.txt)" >> $GITHUB_ENV
+          else
+            ./xray/xray -c xray_config.json >/dev/null 2>&1 &
+            sleep 3
+            echo "PROXY_SERVER=socks5://127.0.0.1:1080" >> $GITHUB_ENV
           fi
 
-          ./xray/xray -c xray_config.json >/dev/null 2>&1 &
-          sleep 3
-          echo "PROXY_SERVER=socks5://127.0.0.1:1080" >> $GITHUB_ENV
-
-      - name: 运行脚本
+      - name: 运行续期脚本
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
@@ -130,7 +130,7 @@ PYEOF
           path: output/screenshots/
           retention-days: 7
 
-      - name: 清理记录
+      - name: 清理旧记录
         if: always()
         uses: Mattraks/delete-workflow-runs@v2
         with:
