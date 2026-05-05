@@ -1,140 +1,88 @@
 name: Host2Play 续期
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
   schedule:
-    - cron: '0 0,11,22 * * *'
-    - cron: '30 5,16 * * *'
+    - cron: '0 0,11,22 * * *'    # 触发点: 00:00, 11:00, 22:00
+    - cron: '30 5,16 * * *'      # 触发点: 05:30, 16:30
+  workflow_dispatch:
 
 permissions:
   actions: write
   contents: read
 
 jobs:
-  renew:
+  run-renew:
+    name: 执行脚本
     runs-on: ubuntu-latest
+
     steps:
-      - name: 拉取代码
+      - name: 拉取仓库
         uses: actions/checkout@v4
 
-      - name: 配置 Python
+      - name: 配置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
+      - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb ffmpeg unzip curl
-          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get install -f -y
-          pip install DrissionPage xvfbwrapper requests pydub SpeechRecognition pysocks
+          wget -q -O /tmp/google-chrome-stable_current_amd64.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i /tmp/google-chrome-stable_current_amd64.deb || sudo apt-get install -f -y
 
-      - name: 启动代理（支持VLESS/VMess/Trojan/SS/SOCKS5）
-        env:
-          PROXY_NODE: ${{ secrets.PROXY_NODE }}
+      - name: 安装 Python 依赖
         run: |
-          if [ -z "$PROXY_NODE" ]; then
-            echo "PROXY_SERVER=" >> $GITHUB_ENV
-            echo "✅ 直连模式"
-            exit 0
-          fi
+          python -m pip install --upgrade pip
+          pip install DrissionPage xvfbwrapper requests SpeechRecognition pydub
 
-          # 如果是SOCKS5直接用
-          if echo "$PROXY_NODE" | grep -q "^socks5://"; then
-            echo "PROXY_SERVER=${PROXY_NODE%%#*}" >> $GITHUB_ENV
-            echo "✅ 使用外部SOCKS5代理"
-            exit 0
-          fi
+      - name: 启用 WARP 网络
+        uses: fscarmen/warp-on-actions@v1.3
+        with:
+          stack: dual
+          mode: client
 
-          # 下载Xray
-          wget -q https://github.com/oyz6/action/releases/download/proxy/Xray-linux-64.zip
-          unzip -q Xray-linux-64.zip -d xray && chmod +x xray/xray
+      - name: 修复 DNS
+        run: |
+          echo "[INFO] 停用 systemd-resolved，设置公共 DNS..."
+          sudo systemctl stop systemd-resolved 2>/dev/null || true
+          sudo systemctl disable systemd-resolved 2>/dev/null || true
 
-          # 把解析逻辑写到单独的临时文件，避免YAML解析问题
-          cat > parse.py << 'EOF'
-import os, json, base64
-from urllib.parse import urlparse, parse_qs
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 1.0.0.1" | sudo tee /etc/resolv.conf
 
-u = os.environ["PROXY_NODE"].strip()
-p = urlparse(u)
-out = None
+          sleep 2
 
-if p.scheme == "vless":
-    uuid, rest = u[8:].split("@", 1)
-    hp, qs = rest.split("?", 1) if "?" in rest else (rest, "")
-    addr, port = hp.rsplit(":", 1)
-    q = parse_qs(qs)
-    out = {
-        "protocol": "vless",
-        "settings": {"vnext": [{"address": addr, "port": int(port), "users": [{"id": uuid, "encryption": "none"}]}]},
-        "streamSettings": {"network": q.get("type", ["tcp"])[0], "security": q.get("security", ["none"])[0]}
-    }
-elif p.scheme == "vmess":
-    d = json.loads(base64.b64decode(u[8:] + "====").decode())
-    out = {
-        "protocol": "vmess",
-        "settings": {"vnext": [{"address": d["add"], "port": int(d["port"]), "users": [{"id": d["id"], "alterId": 0}]}]},
-        "streamSettings": {"network": d.get("net", "tcp"), "security": "tls" if d.get("tls") else "none"}
-    }
-elif p.scheme == "trojan":
-    pwd, rest = u[9:].split("@", 1)
-    hp, qs = rest.split("?", 1) if "?" in rest else (rest, "")
-    addr, port = hp.rsplit(":", 1)
-    out = {
-        "protocol": "trojan",
-        "settings": {"servers": [{"address": addr, "port": int(port), "password": pwd}]},
-        "streamSettings": {"network": "tcp", "security": "tls"}
-    }
-elif p.scheme == "ss":
-    inf, serv = u[5:].split("@", 1)
-    m, pw = base64.b64decode(inf + "==").decode().split(":", 1)
-    addr, port = serv.split(":", 1)
-    out = {
-        "protocol": "shadowsocks",
-        "settings": {"servers": [{"address": addr, "port": int(port), "method": m, "password": pw}]}
-    }
+          echo "[INFO] DNS 测试:"
+          nslookup host2play.gratis 1.1.1.1 || echo "[WARN] 解析失败"
 
-with open("xray_config.json", "w") as f:
-    json.dump({
-        "log": {"loglevel": "warning"},
-        "inbounds": [{"protocol": "socks", "port": 1080, "listen": "127.0.0.1"}],
-        "outbounds": [out]
-    }, f)
-EOF
+          echo ""
+          echo "[INFO] 当前出口 IP:"
+          curl -s --max-time 10 https://api.ipify.org && echo
+          echo "[INFO] WARP Trace:"
+          curl -s --max-time 10 https://www.cloudflare.com/cdn-cgi/trace | grep -E 'ip=|warp=|loc=' || true
 
-          export PROXY_NODE="$PROXY_NODE"
-          python3 parse.py
-
-          # 启动Xray
-          ./xray/xray run -c xray_config.json >/dev/null 2>&1 &
-          sleep 3
-
-          echo "PROXY_SERVER=socks5://127.0.0.1:1080" >> $GITHUB_ENV
-          echo "✅ Xray代理启动成功"
-
-      - name: 运行续期脚本
+      - name: 执行续订
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          PROXY_SERVER: ${{ env.PROXY_SERVER }}
         run: python main.py
 
       - name: 上传截图
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshots
-          path: output/screenshots/
+          name: screenshots-${{ github.run_number }}
+          path: output/screenshots/*.png
           retention-days: 7
+          if-no-files-found: ignore
 
-      - name: 清理旧运行记录
+      - name: 清理历史运行记录
         if: always()
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}
           delete_workflow_pattern: ${{ github.workflow }}
+          retain_days: 0
           keep_minimum_runs: 2
