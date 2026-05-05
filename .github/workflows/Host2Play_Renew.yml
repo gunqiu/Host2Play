@@ -3,8 +3,7 @@ name: Host2Play 续期
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main ]
   schedule:
     - cron: '0 0,11,22 * * *'
     - cron: '30 5,16 * * *'
@@ -14,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  run-renew:
+  renew:
     runs-on: ubuntu-latest
     steps:
       - name: 拉取代码
@@ -25,18 +24,15 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 安装系统依赖
+      - name: 安装依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb ffmpeg unzip curl
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get install -f -y
+          pip install DrissionPage xvfbwrapper requests pydub SpeechRecognition pysocks
 
-      - name: 安装 Python 库
-        run: |
-          pip install DrissionPage xvfbwrapper requests pydub SpeechRecognition pysocks proxy-url
-
-      - name: 下载并配置代理
+      - name: 启动代理（支持VLESS/VMess/Trojan/SS/SOCKS5）
         env:
           PROXY_NODE: ${{ secrets.PROXY_NODE }}
         run: |
@@ -46,20 +42,23 @@ jobs:
             exit 0
           fi
 
+          # 如果是SOCKS5直接用
+          if echo "$PROXY_NODE" | grep -q "^socks5://"; then
+            echo "PROXY_SERVER=${PROXY_NODE%%#*}" >> $GITHUB_ENV
+            echo "✅ 使用外部SOCKS5代理"
+            exit 0
+          fi
+
+          # 下载Xray
           wget -q https://github.com/oyz6/action/releases/download/proxy/Xray-linux-64.zip
           unzip -q Xray-linux-64.zip -d xray && chmod +x xray/xray
 
-          # 直接把Python代码写在单独的脚本里，避免yml多行解析错误
-          cat > parse_proxy.py << 'EOF'
+          # 把解析逻辑写到单独的临时文件，避免YAML解析问题
+          cat > parse.py << 'EOF'
 import os, json, base64
 from urllib.parse import urlparse, parse_qs
 
 u = os.environ["PROXY_NODE"].strip()
-if u.startswith("socks5://"):
-    with open("proxy.txt", "w") as f:
-        f.write(u.split("#")[0])
-    exit(0)
-
 p = urlparse(u)
 out = None
 
@@ -107,15 +106,14 @@ with open("xray_config.json", "w") as f:
 EOF
 
           export PROXY_NODE="$PROXY_NODE"
-          python3 parse_proxy.py
+          python3 parse.py
 
-          if [ -f proxy.txt ]; then
-            echo "PROXY_SERVER=$(cat proxy.txt)" >> $GITHUB_ENV
-          else
-            ./xray/xray -c xray_config.json >/dev/null 2>&1 &
-            sleep 3
-            echo "PROXY_SERVER=socks5://127.0.0.1:1080" >> $GITHUB_ENV
-          fi
+          # 启动Xray
+          ./xray/xray run -c xray_config.json >/dev/null 2>&1 &
+          sleep 3
+
+          echo "PROXY_SERVER=socks5://127.0.0.1:1080" >> $GITHUB_ENV
+          echo "✅ Xray代理启动成功"
 
       - name: 运行续期脚本
         env:
@@ -132,7 +130,7 @@ EOF
           path: output/screenshots/
           retention-days: 7
 
-      - name: 清理旧记录
+      - name: 清理旧运行记录
         if: always()
         uses: Mattraks/delete-workflow-runs@v2
         with:
