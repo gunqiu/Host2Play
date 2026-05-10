@@ -2,7 +2,8 @@ name: Host2Play 续期
 
 on:
   schedule:
-    - cron: '0 */6 * * *'    # 每 6 小时执行一次（UTC 0/6/12/18 点 → 北京时间 8/14/20/2 点）
+    - cron: '0 0,11,22 * * *'    # 触发点: 00:00, 11:00, 22:00
+    - cron: '30 5,16 * * *'      # 触发点: 05:30, 16:30
   workflow_dispatch:
 
 permissions:
@@ -84,4 +85,4 @@ jobs:
           repository: ${{ github.repository }}
           delete_workflow_pattern: ${{ github.workflow }}
           retain_days: 0
-          keep_minimum_runs: 6
+          keep_minimum_runs: 2
