@@ -30,7 +30,7 @@ jobs:
         run: |
           # 下载并启动 Xray
           wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-          unzip xray.zip
+          unzip -o xray.zip
           chmod +x xray
 
           # 写入配置（你的 VMess 节点信息）
