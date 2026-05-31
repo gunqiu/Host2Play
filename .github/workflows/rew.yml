@@ -1,0 +1,54 @@
+name: QuartexNode 自动续期
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"   # 每 12 小时执行一次（UTC 0:00 & 12:00）
+  workflow_dispatch:          # 允许手动触发
+
+permissions:
+  contents: write             # 允许写入仓库（提交 time.txt）
+
+jobs:
+  renew:
+    name: 续期任务
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 执行续期脚本
+        env:
+          QUARTEX_EMAIL:     ${{ secrets.QUARTEX_EMAIL }}
+          QUARTEX_PASSWORD:  ${{ secrets.QUARTEX_PASSWORD }}
+          QUARTEX_SERVER_ID: ${{ secrets.QUARTEX_SERVER_ID }}
+          TG_CONFIG:         ${{ secrets.TG_CONFIG }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, ".")
+          import rew
+          rew.login()
+          rew.try_renew()
+          PY
+
+      - name: 记录运行时间
+        run: |
+          echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> time.txt
+
+      - name: 提交 time.txt
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add time.txt
+          git diff --cached --quiet || git commit -m "chore: record run at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          git push
