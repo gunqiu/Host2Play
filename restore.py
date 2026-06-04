@@ -1,215 +1,165 @@
 import os
 import time
-import re
-import requests
+import random
 from datetime import datetime
 from seleniumbase import SB
 
-# ======================
-# ENV
-# ======================
 USERNAME = os.getenv("MAGMA_USERNAME")
 PASSWORD = os.getenv("MAGMA_PASSWORD")
 
-TG_TOKEN = os.getenv("TG_TOKEN")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")
+BASE_URL = "https://magmanode.com/login"
 
-MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
-
-LOGIN_URL = "https://magmanode.com/login"
-SCREEN_DIR = "scripts/screenshots"
+SCREENSHOT_DIR = "scripts/screenshots"
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
-# ======================
-# LOG
-# ======================
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+def ts():
+    return int(time.time())
 
 
-# ======================
-# TG
-# ======================
-def tg(msg=None, img=None):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
-    try:
-        if msg:
-            requests.post(
-                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                data={"chat_id": TG_CHAT_ID, "text": msg},
-                timeout=10,
-            )
-        if img:
-            with open(img, "rb") as f:
-                requests.post(
-                    f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
-                    data={"chat_id": TG_CHAT_ID},
-                    files={"photo": f},
-                    timeout=20,
-                )
-    except Exception as e:
-        log(f"TG error: {e}")
-
-
-# ======================
-# screenshot
-# ======================
 def shot(sb, name):
-    os.makedirs(SCREEN_DIR, exist_ok=True)
-    path = f"{SCREEN_DIR}/{name}_{int(time.time())}.png"
+    path = f"{SCREENSHOT_DIR}/{name}_{ts()}.png"
     sb.save_screenshot(path)
-    log(f"📸 {path}")
-    return path
+    print(f"📸 screenshot: {path}")
 
 
-# ======================
-# SAFE CLICK（核心）
-# ======================
-def click(sb, keywords):
-    """
-    统一点击策略（成功版本核心）
-    """
-    for k in keywords:
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+
+def find_and_type(sb, selectors, value):
+    """多 selector 容错输入"""
+    for sel in selectors:
         try:
-            sb.click(f"text={k}")
-            log(f"🖱️ click text={k}")
+            sb.type(sel, value, timeout=5)
             return True
-        except:
-            pass
+        except Exception:
+            continue
+    raise Exception(f"无法找到输入框: {selectors}")
+
+
+def click_any(sb, selectors):
+    """多策略点击"""
+    for sel in selectors:
+        try:
+            sb.click(sel, timeout=5)
+            return True
+        except Exception:
+            continue
+    raise Exception(f"无法点击元素: {selectors}")
+
+
+def detect_status(page_text):
+    t = page_text.lower()
+    if "offline" in t:
+        return "Offline"
+    if "starting" in t:
+        return "Starting"
+    if "online" in t:
+        return "Online"
+    return "Unknown"
+
+
+with SB(uc=True, test=True, locale_code="en") as sb:
+
+    for attempt in range(1, 4):
+        log(f"🔁 尝试 {attempt}/3")
 
         try:
-            sb.click(f"xpath=//*[contains(.,'{k}')]")
-            log(f"🖱️ click xpath={k}")
-            return True
-        except:
-            pass
+            # =========================
+            # 1. 打开登录页
+            # =========================
+            log("🌍 打开登录")
+            sb.open(BASE_URL)
+            time.sleep(3)
+            shot(sb, "login_page")
 
-    return False
+            # =========================
+            # 2. 输入账号密码（增强兼容）
+            # =========================
+            log("✏️ 填写账户")
 
+            find_and_type(sb, [
+                'input[name="email"]',
+                'input[type="email"]',
+                'input[placeholder*="email" i]',
+                '#email'
+            ], USERNAME)
 
-# ======================
-# SAFE TYPE（核心）
-# ======================
-def type_any(sb, value):
-    """
-    不依赖 selector，直接扫 input
-    """
-    try:
-        inputs = sb.find_elements("input")
-        for i in inputs:
-            try:
-                i.click()
-                i.clear()
-                i.send_keys(value)
-                return True
-            except:
-                continue
-    except:
-        pass
-    return False
+            find_and_type(sb, [
+                'input[name="password"]',
+                'input[type="password"]',
+                '#password'
+            ], PASSWORD)
 
+            shot(sb, "filled")
 
-# ======================
-# STATUS ENGINE（成功版本关键）
-# ======================
-def get_status(sb):
-    src = sb.get_page_source().lower()
+            # =========================
+            # 3. 登录
+            # =========================
+            log("🔐 点击登录")
+            click_any(sb, [
+                "text=Login",
+                "text=Sign in",
+                "button[type=submit]",
+                "input[type=submit]"
+            ])
 
-    if "online" in src:
-        return "online"
-    if "starting" in src:
-        return "starting"
-    if "offline" in src:
-        return "offline"
+            time.sleep(6)
+            shot(sb, "after_login")
 
-    return "unknown"
+            # =========================
+            # 4. 服务页
+            # =========================
+            log("📊 检查服务")
+            page_text = sb.get_page_source()
+            shot(sb, "services")
 
+            # =========================
+            # 5. Manage
+            # =========================
+            log("🖱️ 打开管理")
 
-# ======================
-# MAIN FLOW
-# ======================
-def run_once():
+            click_any(sb, [
+                "text=Manage",
+                "//a[contains(text(),'Manage')]",
+                "//button[contains(text(),'Manage')]"
+            ])
 
-    with SB(uc=True, test=True, xvfb=True) as sb:
-
-        # ============= LOGIN
-        log("🌍 open login")
-        sb.open(LOGIN_URL)
-        time.sleep(3)
-
-        shot(sb, "login_page")
-
-        log("✏️ fill account")
-        type_any(sb, USERNAME)
-        type_any(sb, PASSWORD)
-
-        shot(sb, "filled")
-
-        log("🔐 login click")
-        click(sb, ["Sign in", "Login", "Log in"])
-        time.sleep(6)
-
-        shot(sb, "after_login")
-
-        # ============= SERVICES
-        log("📊 check services")
-
-        if "services" in sb.get_current_url():
-            log("✅ login OK")
-
-        shot(sb, "services")
-
-        # ============= MANAGE
-        log("🖱️ open manage")
-
-        click(sb, ["Manage", "manage"])
-        time.sleep(5)
-
-        shot(sb, "console")
-
-        # ============= STATUS
-        status = get_status(sb)
-        log(f"🖥️ status = {status}")
-
-        if status == "offline":
-            log("▶️ start server")
-            click(sb, ["START", "Start"])
-        else:
-            log("🟢 already running")
-
-        # ============= POLLING LOOP（成功版本核心）
-        for i in range(12):
             time.sleep(5)
+            shot(sb, "console")
 
-            status = get_status(sb)
-            log(f"⏳ {i+1}/12 => {status}")
+            # =========================
+            # 6. 状态检测
+            # =========================
+            status = detect_status(sb.get_page_source())
+            log(f"🖥️ 状态 = {status}")
 
-            if status == "online":
-                log("🟢 ONLINE CONFIRMED")
-                break
+            if status == "Offline":
+                log("▶️ 点击 START")
+                click_any(sb, [
+                    "text=Start",
+                    "text=START",
+                    "button=Start"
+                ])
 
-        final = shot(sb, "final")
+            # =========================
+            # 7. 轮询
+            # =========================
+            for i in range(12):
+                time.sleep(5)
+                status = detect_status(sb.get_page_source())
+                log(f"⏳ {i+1}/12 => {status}")
 
-        tg("restore completed")
-        tg(img=final)
+                if status in ["Starting", "Online"]:
+                    break
 
+            shot(sb, "final")
+            log("🎉 完成")
 
-# ======================
-# RETRY WRAPPER
-# ======================
-def main():
-    for i in range(MAX_RETRY):
-        try:
-            log(f"🔁 attempt {i+1}/{MAX_RETRY}")
-            run_once()
-            return
+            break
+
         except Exception as e:
-            log(f"❌ error: {e}")
-            time.sleep(5)
-
-    log("❌ all failed")
-
-
-if __name__ == "__main__":
-    main()
+            log(f"❌ 失败: {e}")
+            shot(sb, f"error_attempt_{attempt}")
+            time.sleep(3)
