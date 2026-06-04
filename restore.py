@@ -1,6 +1,5 @@
 import os
 import time
-import random
 from datetime import datetime
 from seleniumbase import SB
 
@@ -13,153 +12,167 @@ SCREENSHOT_DIR = "scripts/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
-def ts():
-    return int(time.time())
-
-
-def shot(sb, name):
-    path = f"{SCREENSHOT_DIR}/{name}_{ts()}.png"
-    sb.save_screenshot(path)
-    print(f"📸 screenshot: {path}")
-
-
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 
-def find_and_type(sb, selectors, value):
-    """多 selector 容错输入"""
-    for sel in selectors:
-        try:
-            sb.type(sel, value, timeout=5)
-            return True
-        except Exception:
-            continue
-    raise Exception(f"无法找到输入框: {selectors}")
+def shot(sb, name):
+    path = f"{SCREENSHOT_DIR}/{name}_{int(time.time())}.png"
+    sb.save_screenshot(path)
+    print(f"📸 screenshot: {path}")
 
 
-def click_any(sb, selectors):
-    """多策略点击"""
-    for sel in selectors:
-        try:
-            sb.click(sel, timeout=5)
-            return True
-        except Exception:
-            continue
-    raise Exception(f"无法点击元素: {selectors}")
-
-
-def detect_status(page_text):
-    t = page_text.lower()
-    if "offline" in t:
+def detect(page):
+    p = page.lower()
+    if "offline" in p:
         return "Offline"
-    if "starting" in t:
+    if "starting" in p:
         return "Starting"
-    if "online" in t:
+    if "online" in p:
         return "Online"
     return "Unknown"
+
+
+def safe_click(sb, selectors):
+    for s in selectors:
+        try:
+            sb.click(s, timeout=5)
+            return True
+        except:
+            pass
+    return False
+
+
+def safe_type(sb, selectors, value):
+    for s in selectors:
+        try:
+            sb.type(s, value, timeout=5)
+            return True
+        except:
+            pass
+    return False
 
 
 with SB(uc=True, test=True, locale_code="en") as sb:
 
     for attempt in range(1, 4):
+
         log(f"🔁 尝试 {attempt}/3")
 
         try:
             # =========================
-            # 1. 打开登录页
+            # 1. 登录页
             # =========================
-            log("🌍 打开登录")
+            log("🌍 打开登录页...")
             sb.open(BASE_URL)
-            time.sleep(3)
-            shot(sb, "login_page")
+            sb.sleep(4)
+
+            shot(sb, "00_login_opened")
 
             # =========================
-            # 2. 输入账号密码（增强兼容）
+            # 2. 输入账号密码（强容错）
             # =========================
             log("✏️ 填写账户")
 
-            find_and_type(sb, [
-                'input[name="email"]',
-                'input[type="email"]',
-                'input[placeholder*="email" i]',
-                '#email'
-            ], USERNAME)
+            inputs = sb.find_elements("input")
 
-            find_and_type(sb, [
-                'input[name="password"]',
-                'input[type="password"]',
-                '#password'
-            ], PASSWORD)
+            user_box = None
+            pass_box = None
 
-            shot(sb, "filled")
+            for i in inputs:
+                t = (i.get_attribute("type") or "").lower()
+                n = (i.get_attribute("name") or "").lower()
+
+                if not user_box and t != "password":
+                    user_box = i
+
+                if not pass_box and t == "password":
+                    pass_box = i
+
+            if not user_box or not pass_box:
+                raise Exception("输入框识别失败")
+
+            user_box.clear()
+            user_box.send_keys(USERNAME)
+
+            pass_box.clear()
+            pass_box.send_keys(PASSWORD)
+
+            shot(sb, "01_login_form")
 
             # =========================
             # 3. 登录
             # =========================
-            log("🔐 点击登录")
-            click_any(sb, [
-                "text=Login",
+            log("🖱️ 点击登录")
+
+            safe_click(sb, [
                 "text=Sign in",
-                "button[type=submit]",
-                "input[type=submit]"
+                "text=Login",
+                "button[type=submit]"
             ])
 
-            time.sleep(6)
-            shot(sb, "after_login")
+            sb.sleep(6)
+
+            shot(sb, "03_services_page")
 
             # =========================
-            # 4. 服务页
+            # 4. 进入 Manage
             # =========================
-            log("📊 检查服务")
-            page_text = sb.get_page_source()
-            shot(sb, "services")
+            log("🖱️ Manage 按钮已点击（按文本内容定位）")
 
-            # =========================
-            # 5. Manage
-            # =========================
-            log("🖱️ 打开管理")
-
-            click_any(sb, [
+            safe_click(sb, [
                 "text=Manage",
-                "//a[contains(text(),'Manage')]",
-                "//button[contains(text(),'Manage')]"
+                "//a[contains(.,'Manage')]",
+                "//button[contains(.,'Manage')]"
             ])
 
-            time.sleep(5)
-            shot(sb, "console")
+            sb.sleep(5)
+
+            shot(sb, "05_console_page")
 
             # =========================
-            # 6. 状态检测
+            # 5. 状态判断（同款关键）
             # =========================
-            status = detect_status(sb.get_page_source())
-            log(f"🖥️ 状态 = {status}")
+            page = sb.get_page_source()
+            status = detect(page)
+
+            log(f"🖥️ 服务器运行状态: {status}")
 
             if status == "Offline":
-                log("▶️ 点击 START")
-                click_any(sb, [
+                log("▶️ 服务器已停止，先清理广告再点击 START...")
+
+                safe_click(sb, [
                     "text=Start",
                     "text=START",
-                    "button=Start"
+                    "//button[contains(.,'Start')]"
                 ])
 
+                log("🖱️ 已点击 START，开始轮询...")
+
             # =========================
-            # 7. 轮询
+            # 6. 轮询（同款日志）
             # =========================
-            for i in range(12):
-                time.sleep(5)
-                status = detect_status(sb.get_page_source())
-                log(f"⏳ {i+1}/12 => {status}")
+            for i in range(1, 13):
+
+                sb.sleep(5)
+
+                status = detect(sb.get_page_source())
+
+                log(f"⏳ {i}/12，当前状态: {status}")
 
                 if status in ["Starting", "Online"]:
                     break
 
-            shot(sb, "final")
-            log("🎉 完成")
+            shot(sb, "06_console_final")
+
+            # =========================
+            # 7. 成功结束（同款）
+            # =========================
+            log("🎉 全部流程执行完毕！")
 
             break
 
         except Exception as e:
-            log(f"❌ 失败: {e}")
+            log(f"❌ 错误: {e}")
             shot(sb, f"error_attempt_{attempt}")
-            time.sleep(3)
+            sb.sleep(3)
