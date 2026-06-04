@@ -14,18 +14,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # =========================
-      # 从私有 repo 拉取脚本
-      # 用 curl + PAT Token 直接下载原始文件
-      # 避免 checkout 路径问题导致 "No such file" 报错
+      # 从公开仓库拉取 restore.py（已修复 401）
       # =========================
       - name: 拉取 restore.py
         run: |
           mkdir -p scripts/screenshots
+
           curl -fsSL \
-            -H "Authorization: token ${{ secrets.PRIVATE_REPO_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/${{ github.repository_owner }}/magmanode-Restore/contents/restore.py" \
+            "https://raw.githubusercontent.com/gunqiu/Host2Play/main/restore.py" \
             -o scripts/restore.py
+
           ls -lh scripts/restore.py && echo "✅ restore.py 下载成功" || \
             (echo "❌ restore.py 下载失败" && exit 1)
 
@@ -40,7 +38,6 @@ jobs:
 
       # =========================
       # 系统依赖
-      # xvfb：SeleniumBase UC mode headed 模式需要虚拟显示
       # =========================
       - name: 安装系统依赖
         run: |
@@ -56,8 +53,6 @@ jobs:
 
       # =========================
       # Python 依赖
-      # seleniumbase：UC mode 处理 Cloudflare Turnstile
-      # requests：TG 通知
       # =========================
       - name: 安装 Python 依赖
         run: |
@@ -67,14 +62,16 @@ jobs:
           seleniumbase install uc-driver || true
           python -c "from seleniumbase import SB; print('✅ seleniumbase 导入成功')"
 
+      # =========================
+      # 检查 IP
+      # =========================
       - name: 检查 IP
         run: |
           echo "🌍 IP: $(curl -s https://api.ipify.org)"
           curl -s https://ipinfo.io | jq '{ip,city,country,org}' 2>/dev/null || true
 
       # =========================
-      # 运行
-      # xvfb-run：为 headed Chrome 提供虚拟 X 显示
+      # 运行 restore.py
       # =========================
       - name: 运行 restore.py
         env:
@@ -90,6 +87,9 @@ jobs:
             python scripts/restore.py
         continue-on-error: true
 
+      # =========================
+      # 上传截图
+      # =========================
       - name: 上传截图
         uses: actions/upload-artifact@v4
         if: always()
