@@ -18,7 +18,7 @@ MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
 SCREENSHOT_DIR = "scripts/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-TARGET_URL = "https://host2play.example.com/login"  # ← 如果你有真实地址，替换这里
+TARGET_URL = "https://magmanode.com/login"  # ← 如果你有真实地址，替换这里
 
 
 # =========================
