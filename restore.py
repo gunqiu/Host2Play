@@ -4,9 +4,6 @@ import requests
 from datetime import datetime
 from seleniumbase import SB
 
-# ======================
-# 配置
-# ======================
 USERNAME = os.getenv("MAGMA_USERNAME")
 PASSWORD = os.getenv("MAGMA_PASSWORD")
 
@@ -20,30 +17,30 @@ SCREENSHOT_DIR = "scripts/screenshots"
 
 
 # ======================
-# 工具函数
+# log
 # ======================
 def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+    return datetime.now().strftime("%H:%M:%S")
 
 def log(msg):
     print(f"[{now()}] {msg}", flush=True)
 
 
-def send_tg(text=None, image=None):
+# ======================
+# tg
+# ======================
+def tg(msg=None, img=None):
     if not TG_TOKEN or not TG_CHAT_ID:
         return
-
     try:
-        if text:
+        if msg:
             requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                data={"chat_id": TG_CHAT_ID, "text": text},
+                data={"chat_id": TG_CHAT_ID, "text": msg},
                 timeout=10,
             )
-
-        if image:
-            with open(image, "rb") as f:
+        if img:
+            with open(img, "rb") as f:
                 requests.post(
                     f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
                     data={"chat_id": TG_CHAT_ID},
@@ -51,115 +48,176 @@ def send_tg(text=None, image=None):
                     timeout=20,
                 )
     except Exception as e:
-        log(f"❌ TG 发送失败: {e}")
+        log(f"TG error: {e}")
 
 
+# ======================
+# screenshot
+# ======================
 def shot(sb, name):
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
     path = f"{SCREENSHOT_DIR}/{name}_{int(time.time())}.png"
     sb.save_screenshot(path)
-    log(f"📸 screenshot: {path}")
+    log(f"📸 {path}")
     return path
+
+
+# ======================
+# 自适应输入（核心）
+# ======================
+def smart_type(sb, value, label):
+    """
+    不依赖 selector，自动找 input
+    """
+
+    selectors = [
+        "input[type='email']",
+        "input[type='text']",
+        "input[type='password']",
+        "input",
+    ]
+
+    for sel in selectors:
+        try:
+            els = sb.find_elements(sel)
+            for el in els:
+                try:
+                    el.click()
+                    el.clear()
+                    el.send_keys(value)
+                    log(f"✏️ {label} -> matched {sel}")
+                    return True
+                except:
+                    continue
+        except:
+            continue
+
+    log(f"❌ {label} not found")
+    return False
+
+
+# ======================
+# 点击按钮（模糊匹配）
+# ======================
+def smart_click(sb, keywords):
+    """
+    keywords: list[str]
+    """
+
+    try:
+        page = sb.get_page_source()
+    except:
+        page = ""
+
+    for kw in keywords:
+        try:
+            sb.click(f"text={kw}")
+            log(f"🖱️ clicked text={kw}")
+            return True
+        except:
+            pass
+
+        try:
+            sb.click(f"xpath=//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'{kw.lower()}')]")
+            log(f"🖱️ clicked xpath contains {kw}")
+            return True
+        except:
+            pass
+
+    log(f"❌ click failed: {keywords}")
+    return False
 
 
 # ======================
 # 主流程
 # ======================
 def run_once():
+
     with SB(uc=True, test=True, xvfb=True) as sb:
-        log("🌍 opening page...")
+
+        log("🌍 open login page")
         sb.open(TARGET_URL)
+        time.sleep(3)
+
+        shot(sb, "after_open")
+
+        # ======================
+        # 登录输入（稳定版）
+        # ======================
+        log("✏️ filling credentials")
+
+        smart_type(sb, USERNAME, "username")
+        smart_type(sb, PASSWORD, "password")
+
+        shot(sb, "filled")
+
+        # ======================
+        # 登录按钮
+        # ======================
+        log("🔐 login click")
+
+        smart_click(sb, ["Sign in", "Login", "Log in", "Submit"])
+
+        time.sleep(6)
 
         shot(sb, "after_login")
 
         # ======================
-        # 输入账号密码
+        # services 判断
         # ======================
-        try:
-            sb.type('input[name="email"]', USERNAME)
-            sb.type('input[name="password"]', PASSWORD)
-            log("✏️ account/password filled")
-        except Exception as e:
-            log(f"❌ fill error: {e}")
-
-        shot(sb, "filled_form")
-
-        # ======================
-        # 点击登录
-        # ======================
-        try:
-            sb.click('button[type="submit"]')
-            log("🔐 clicking login")
-        except:
-            sb.click("text=Sign in")
-
-        time.sleep(6)
-
-        shot(sb, "after_login_click")
-
-        # ======================
-        # 判断是否进入 services
-        # ======================
-        if "services" in sb.get_current_url():
-            log("✅ login success -> services page")
+        url = sb.get_current_url()
+        if "services" in url:
+            log("✅ login success")
         else:
-            log("⚠️ login state uncertain, continue anyway")
+            log("⚠️ login uncertain")
 
-        shot(sb, "services_page")
-
-        # ======================
-        # 点击 Manage
-        # ======================
-        try:
-            sb.click("text=Manage")
-            log("🖱️ clicked Manage")
-        except Exception as e:
-            log(f"❌ Manage click failed: {e}")
-            return
-
-        time.sleep(4)
-
-        shot(sb, "console_page")
+        shot(sb, "services")
 
         # ======================
-        # 判断服务器状态
+        # Manage
         # ======================
-        status_text = sb.get_page_source()
+        log("🖱️ entering manage")
 
-        if "Offline" in status_text:
-            log("🖥️ server is Offline -> clicking START")
+        smart_click(sb, ["Manage", "manage", "Panel", "console"])
 
-            try:
-                sb.click("text=START")
-            except:
-                sb.click("button=Start")
+        time.sleep(5)
 
-            log("▶️ START clicked")
+        shot(sb, "console")
+
+        # ======================
+        # 状态判断
+        # ======================
+        page = sb.get_page_source().lower()
+
+        if "offline" in page:
+            log("🛑 offline -> start server")
+
+            smart_click(sb, ["START", "Start", "start"])
 
         else:
-            log("🖥️ server already running")
+            log("🟢 already running")
 
         # ======================
         # 轮询状态
         # ======================
-        for i in range(12):
+        for i in range(10):
             time.sleep(5)
-            page = sb.get_page_source()
+            page = sb.get_page_source().lower()
 
-            if "Starting" in page:
-                log(f"⏳ polling {i+1}/12: Starting")
-            elif "Online" in page:
-                log(f"✅ server Online at attempt {i+1}")
+            if "starting" in page:
+                log(f"⏳ {i+1}/10 starting")
+            if "online" in page:
+                log("🟢 online confirmed")
                 break
 
-        final_shot = shot(sb, "final")
+        final = shot(sb, "final")
 
-        send_tg("🎉 Magmanode restore completed")
-        send_tg(image=final_shot)
+        tg("restore done")
+        tg(img=final)
 
 
 # ======================
-# 重试机制
+# retry
 # ======================
 def main():
     for i in range(MAX_RETRY):
@@ -168,10 +226,10 @@ def main():
             run_once()
             return
         except Exception as e:
-            log(f"❌ failed: {e}")
+            log(f"❌ error: {e}")
             time.sleep(5)
 
-    log("❌ all attempts failed")
+    log("❌ all failed")
 
 
 if __name__ == "__main__":
