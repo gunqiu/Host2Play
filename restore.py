@@ -1,13 +1,12 @@
 import os
 import time
-import json
 import requests
 from datetime import datetime
+from seleniumbase import SB
 
 # =========================
-# 环境变量（严格匹配你的 YAML）
+# 配置
 # =========================
-
 USERNAME = os.getenv("MAGMA_USERNAME")
 PASSWORD = os.getenv("MAGMA_PASSWORD")
 
@@ -16,176 +15,112 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
 
-STATUS_URL = os.getenv("STATUS_URL")
-RESTORE_URL = os.getenv("RESTORE_URL")
+SCREENSHOT_DIR = "scripts/screenshots"
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-TIMEOUT = 120
-CHECK_INTERVAL = 5
+TARGET_URL = "https://host2play.example.com/login"  # ← 如果你有真实地址，替换这里
 
 
 # =========================
-# TG 通知
+# Telegram 推送
 # =========================
-
-def tg(msg):
+def tg_send(text):
     if not TG_TOKEN or not TG_CHAT_ID:
-        print("⚠️ TG 未配置")
         return
 
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         requests.post(url, data={
             "chat_id": TG_CHAT_ID,
-            "text": msg
+            "text": text
         }, timeout=10)
     except Exception as e:
-        print("TG失败:", e)
+        print("TG send error:", e)
 
 
-def tg_photo(path, caption=""):
+def tg_send_photo(path, caption=""):
     if not TG_TOKEN or not TG_CHAT_ID:
         return
 
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
     try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
         with open(path, "rb") as f:
             requests.post(url, data={
                 "chat_id": TG_CHAT_ID,
                 "caption": caption
             }, files={"photo": f}, timeout=20)
     except Exception as e:
-        print("TG图片失败:", e)
+        print("TG photo error:", e)
 
 
 # =========================
-# 状态请求（关键修复点）
+# 截图
 # =========================
-
-def get_status():
-    if not STATUS_URL:
-        print("❌ STATUS_URL 未设置")
-        return {}
-
-    try:
-        r = requests.get(STATUS_URL, timeout=10)
-        try:
-            return r.json()
-        except:
-            print("⚠️ 状态不是JSON:", r.text[:200])
-            return {"raw": r.text}
-    except Exception as e:
-        print("❌ 状态请求失败:", e)
-        return {}
-
-
-# =========================
-# 触发恢复（核心）
-# =========================
-
-def trigger_restore():
-    if not RESTORE_URL:
-        print("❌ RESTORE_URL 未设置")
-        return False
-
-    for i in range(MAX_RETRY):
-        try:
-            r = requests.get(RESTORE_URL, timeout=10)
-            print(f"🚀 restore触发 {i+1}/{MAX_RETRY}: {r.status_code}")
-            print(r.text[:200])
-            return True
-        except Exception as e:
-            print("❌ restore失败:", e)
-            time.sleep(3)
-
-    return False
-
-
-# =========================
-# 判断状态（修复核心bug）
-# =========================
-
-def is_running(data):
-    if not data:
-        return False
-
-    text = str(data).lower()
-
-    # 兼容各种返回格式
-    return (
-        "running" in text or
-        "starting" in text or
-        "\"status\":\"running\"" in text or
-        "\"status\": \"running\"" in text
-    )
-
-
-# =========================
-# 主循环（修复120s问题关键）
-# =========================
-
-def wait_running():
-    start = time.time()
-
-    while True:
-        data = get_status()
-
-        print(f"[{datetime.now()}] STATUS => {data}")
-
-        if is_running(data):
-            print("✅ 服务已运行")
-            return True
-
-        if time.time() - start > TIMEOUT:
-            print("⚠️ 超时未 Running")
-            return False
-
-        time.sleep(CHECK_INTERVAL)
-
-
-# =========================
-# 截图（可选兼容）
-# =========================
-
-def save_log_snapshot():
-    os.makedirs("scripts/screenshots", exist_ok=True)
-
-    path = f"scripts/screenshots/restore_{int(time.time())}.txt"
-    with open(path, "w") as f:
-        f.write("restore timeout snapshot\n")
-
+def save_shot(sb, name):
+    path = f"{SCREENSHOT_DIR}/{name}_{int(time.time())}.png"
+    sb.save_screenshot(path)
+    print("📸 screenshot:", path)
     return path
 
 
 # =========================
-# 主流程
+# 主逻辑
 # =========================
+def run_once():
+    with SB(uc=True, headless=True) as sb:
+        print("🌍 opening page...")
+        sb.open(TARGET_URL)
 
-def main():
-    print("==== Magma Restore Start ====")
+        time.sleep(3)
 
-    tg("🚀 Restore 开始执行")
+        # ===== 登录 =====
+        try:
+            sb.type("input[name='username']", USERNAME)
+            sb.type("input[name='password']", PASSWORD)
+            sb.click("button[type='submit']")
+        except Exception:
+            print("⚠️ login selectors not matched, skip auto login")
 
-    # 1. 触发 restore
-    ok = trigger_restore()
-    if not ok:
-        tg("❌ restore 触发失败")
-        return
+        time.sleep(8)
 
-    # 2. 等待状态
-    success = wait_running()
+        save_shot(sb, "after_login")
 
-    # 3. 结果处理
-    snap = save_log_snapshot()
+        # ===== 等待系统状态 =====
+        start = time.time()
+        while time.time() - start < 120:
+            page = sb.get_page_source()
 
-    if success:
-        tg("🎉 服务已恢复 Running")
-        tg_photo(snap, "Running OK")
-    else:
-        tg("❌ 120s 内未进入 Running")
-        tg_photo(snap, "Timeout Failure")
+            if "running" in page.lower() or "starting" in page.lower():
+                print("✅ system running detected")
+                break
 
-    print("==== DONE ====")
+            time.sleep(5)
+
+        # 最终截图
+        final_path = save_shot(sb, "final")
+
+        tg_send("🎉 Magma Restore 执行完成")
+        tg_send_photo(final_path, "restore result")
+
+        return True
 
 
+# =========================
+# 重试机制
+# =========================
 if __name__ == "__main__":
-    main()
+    tg_send("🚀 Restore task started")
+
+    for i in range(MAX_RETRY):
+        print(f"🔁 attempt {i+1}/{MAX_RETRY}")
+
+        try:
+            ok = run_once()
+            if ok:
+                break
+        except Exception as e:
+            print("❌ error:", e)
+            tg_send(f"❌ restore error: {e}")
+            time.sleep(5)
+
+    tg_send("🏁 Restore finished")
